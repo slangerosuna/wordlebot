@@ -1,5 +1,9 @@
-use std::{array, collections::{HashMap, HashSet}, io::Write};
 use rayon::prelude::*;
+use std::{
+    array,
+    collections::{HashMap, HashSet},
+    io::Write,
+};
 
 #[derive(Debug, Clone)]
 struct Constraints {
@@ -109,10 +113,7 @@ fn find_guess_fitness(guess: &str, words: &[&str]) -> f64 {
     entropy + if words.contains(&guess) { 0.01 } else { 0.0 } // Small bias for valid words
 }
 
-fn find_best_guess(
-    all_words: &[&'static str],
-    remaining_words: &[&'static str],
-) -> &'static str {
+fn find_best_guess(all_words: &[&'static str], remaining_words: &[&'static str]) -> &'static str {
     all_words
         .par_iter()
         .map(|&word| (word, find_guess_fitness(word, remaining_words)))
@@ -144,8 +145,11 @@ fn main() {
     std::io::stdin().read_line(&mut hard_mode).unwrap();
     let hard_mode = hard_mode.trim().to_lowercase() == "y";
 
-    if bench { benchmark(hard_mode); }
-    else { run_assister(hard_mode); }
+    if bench {
+        benchmark(hard_mode);
+    } else {
+        run_assister(hard_mode);
+    }
 }
 
 fn benchmark(hard_mode: bool) {
@@ -172,7 +176,7 @@ fn benchmark(hard_mode: bool) {
             i += 1;
 
             let guess = if i == 1 {
-                "tares" // Hard codes the first best guess because there's no point in calculating it again every time
+                "salet" // Hard codes the first best guess because there's no point in calculating it again every time
             } else if words.len() <= 2 || i >= max_iterations {
                 words[0]
             } else if !hard_mode {
@@ -200,7 +204,12 @@ fn benchmark(hard_mode: bool) {
         let portion_done = iteration as f32 / iterations as f32;
         let progress_bar_length = 50;
         let progress_bar = (portion_done * progress_bar_length as f32).round() as usize;
-        let progress_bar_str = "=".repeat(progress_bar) + &if progress_bar_length > progress_bar { ">".to_owned() + &" ".repeat(progress_bar_length - progress_bar - 1)} else { "".to_string() };
+        let progress_bar_str = "=".repeat(progress_bar)
+            + &if progress_bar_length > progress_bar {
+                ">".to_owned() + &" ".repeat(progress_bar_length - progress_bar - 1)
+            } else {
+                "".to_string()
+            };
         println!("\x1B[2A\r[{}]", progress_bar_str);
 
         println!(
@@ -228,7 +237,6 @@ fn run_assister(hard_mode: bool) {
     println!("Enter your guess and the result (e.g. 'salet ggyyy') or 'exit' to quit.");
     println!("Result format: g = green, y = yellow, x = gray (e.g. 'ggyyx' for 'salet').");
 
-
     let all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
     let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
     let mut constraints = Constraints::new();
@@ -238,7 +246,7 @@ fn run_assister(hard_mode: bool) {
     loop {
         i += 1;
         let best_guess = if i == 1 {
-            "tares"
+            "salet"
         } else if words.len() <= 2 || i >= max_iterations {
             words[0]
         } else if !hard_mode {
@@ -248,7 +256,6 @@ fn run_assister(hard_mode: bool) {
         };
 
         println!("Best guess: {}", best_guess);
-
 
         if loop {
             std::io::stdout().flush().unwrap();
@@ -293,12 +300,15 @@ fn run_assister(hard_mode: bool) {
                 break true;
             }
 
-            let output: Vec<WordleAnswerColor> = result.chars().map(|c| match c {
-                'g' => WordleAnswerColor::Green,
-                'y' => WordleAnswerColor::Yellow,
-                'x' => WordleAnswerColor::Gray,
-                _ => panic!("Invalid result character: '{}'. Use 'g', 'y', or 'x'.", c),
-            }).collect();
+            let output: Vec<WordleAnswerColor> = result
+                .chars()
+                .map(|c| match c {
+                    'g' => WordleAnswerColor::Green,
+                    'y' => WordleAnswerColor::Yellow,
+                    'x' => WordleAnswerColor::Gray,
+                    _ => panic!("Invalid result character: '{}'. Use 'g', 'y', or 'x'.", c),
+                })
+                .collect();
 
             constraints.update_from_guess(guess, output.try_into().unwrap());
 
