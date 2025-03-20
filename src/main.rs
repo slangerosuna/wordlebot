@@ -1,6 +1,5 @@
-use futures::future::join_all;
 use std::{array, collections::{HashMap, HashSet}, io::Write};
-use tokio::runtime::*;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 struct Constraints {
@@ -110,31 +109,13 @@ fn find_guess_fitness(guess: &str, words: &[&str]) -> f64 {
     entropy + if words.contains(&guess) { 0.01 } else { 0.0 } // Small bias for valid words
 }
 
-async fn find_best_guess(
+fn find_best_guess(
     all_words: &[&'static str],
     remaining_words: &[&'static str],
 ) -> &'static str {
-    // make words live forever
-    let remaining_words =
-        unsafe { std::mem::transmute::<&[&'static str], &'static [&'static str]>(remaining_words) };
-    let all_words =
-        unsafe { std::mem::transmute::<&[&'static str], &'static [&'static str]>(all_words) };
-
-    let batch_size = (all_words.len() / num_cpus::get()).max(1) * 2;
-    let futures = all_words.chunks(batch_size).map(|chunk| {
-        tokio::spawn(async move {
-            chunk
-                .iter()
-                .map(|&word| (word, find_guess_fitness(word, remaining_words)))
-                .collect::<Vec<_>>()
-        })
-    });
-
-    join_all(futures)
-        .await
-        .iter()
-        .flatten()
-        .flatten()
+    all_words
+        .par_iter()
+        .map(|&word| (word, find_guess_fitness(word, remaining_words)))
         .max_by_key(|&guess| ordered_float::OrderedFloat(guess.1))
         .unwrap()
         .0
@@ -149,11 +130,24 @@ enum WordleAnswerColor {
 }
 
 fn main() {
-    let rt = Builder::new_multi_thread()
-        .worker_threads(num_cpus::get())
-        .enable_all()
-        .build()
-        .unwrap();
+    print!("Benchmark? (y/n) ");
+    std::io::stdout().flush().unwrap();
+    let mut bench = String::new();
+    std::io::stdin().read_line(&mut bench).unwrap();
+    let bench = bench.trim().to_lowercase() == "y";
+
+    print!("Hard Mode? (y/n) ");
+    std::io::stdout().flush().unwrap();
+    let mut hard_mode = String::new();
+    std::io::stdin().read_line(&mut hard_mode).unwrap();
+    let hard_mode = hard_mode.trim().to_lowercase() == "y";
+
+    if bench { benchmark(hard_mode); }
+    else { run_assister(hard_mode); }
+}
+
+fn benchmark(hard_mode: bool) {
+    println!("Running Benchmark...");
 
     let mut total_iterations = 0;
     let mut failures = 0;
@@ -163,9 +157,8 @@ fn main() {
     let all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
     print!("\n\n");
 
-    for iteration in 1..iterations {
+    for iteration in 0..iterations {
         let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
-        //let correct = rand::rng().next_u32() as usize % words.len();
         let correct = words[iteration];
 
         let mut constraints = Constraints::new();
@@ -180,8 +173,10 @@ fn main() {
                 "salet"
             } else if words.len() <= 2 || i >= max_iterations {
                 words[0]
+            } else if !hard_mode {
+                find_best_guess(&all_words, &words)
             } else {
-                rt.block_on(find_best_guess(&all_words, &words))
+                find_best_guess(&words, &words)
             };
             if guess == correct {
                 break;
@@ -190,10 +185,7 @@ fn main() {
             let output = simulate_guess(correct, guess);
             constraints.update_from_guess(guess, output);
 
-            words = words
-                .into_iter()
-                .filter(|&word| constraints.matches(word))
-                .collect();
+            words.retain(|&word| constraints.matches(word));
 
             if i >= max_iterations {
                 failures += 1;
@@ -204,14 +196,13 @@ fn main() {
         total_iterations += i;
 
         let portion_done = iteration as f32 / iterations as f32;
-        // 25 characters for the progress bar
         let progress_bar_length = 50;
         let progress_bar = (portion_done * progress_bar_length as f32).round() as usize;
-        let progress_bar_str = "=".repeat(progress_bar) + if progress_bar_length > progress_bar { ">" } else { "" } + &" ".repeat(progress_bar_length - progress_bar - 1);
+        let progress_bar_str = "=".repeat(progress_bar) + &if progress_bar_length > progress_bar { ">".to_owned() + &" ".repeat(progress_bar_length - progress_bar - 1)} else { "".to_string() };
         println!("\x1B[2A\r[{}]", progress_bar_str);
 
         println!(
-            "{:.1}% done {:.3}% accuracy {:.3} average attempts",
+            "{:.1}% done {:.1}% accuracy {:.3} average attempts",
             portion_done * 100.,
             (1. - failures as f32 / (iteration + 1) as f32) * 100.,
             total_iterations as f32 / (iteration + 1) as f32
@@ -220,12 +211,104 @@ fn main() {
     }
 
     println!(
-        "\x1B[1A\r100.0% done {:.0}% accuracy {:.3} average attempts",
+        "\x1B[1A\r100.0% done {:.1}% accuracy {:.3} average attempts",
         (1. - failures as f32 / iterations as f32) * 100.,
         total_iterations as f32 / iterations as f32,
     );
 
     if failures > 0 {
         println!("{} failures", failures);
+    }
+}
+
+fn run_assister(hard_mode: bool) {
+    println!("Running Assister...");
+    println!("Enter your guess and the result (e.g. 'salet ggyyy') or 'exit' to quit.");
+    println!("Result format: g = green, y = yellow, x = gray (e.g. 'ggyyx' for 'salet').");
+
+
+    let all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
+    let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
+    let mut constraints = Constraints::new();
+    let max_iterations = 6;
+    let mut i = 0;
+
+    loop {
+        i += 1;
+        let best_guess = if i == 1 {
+            "salet"
+        } else if words.len() <= 2 || i >= max_iterations {
+            words[0]
+        } else if !hard_mode {
+            find_best_guess(&all_words, &words)
+        } else {
+            find_best_guess(&words, &words)
+        };
+
+        println!("Best guess: {}", best_guess);
+
+
+        if loop {
+            std::io::stdout().flush().unwrap();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+
+            let input = input.trim();
+
+            if input.eq_ignore_ascii_case("exit") {
+                break true;
+            }
+
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            if parts.len() != 2 {
+                println!("You must enter two words");
+                println!("Invalid input. Please enter your guess and result (e.g. 'salet ggyyx').");
+                continue;
+            }
+            let guess = parts[0];
+            let result = parts[1];
+
+            if guess.len() != 5 || result.len() != 5 {
+                println!("Guess and result must be 5 characters long.");
+                println!("Invalid input. Please enter your guess and result (e.g. 'salet ggyyx').");
+                continue;
+            }
+
+            if result.chars().any(|c| !matches!(c, 'g' | 'y' | 'x')) {
+                println!("Result must only contain 'g', 'y', or 'x'.");
+                println!("Invalid input. Please enter your guess and result (e.g. 'salet ggyyx').");
+                continue;
+            }
+
+            if !all_words.contains(&guess) {
+                println!("Guess '{}' is not a valid word.", guess);
+                println!("Invalid input. Please enter your guess and result (e.g. 'salet ggyyx').");
+                continue;
+            }
+
+            if result == "ggggg" {
+                println!("Congratulations! You've guessed the word '{}'.", guess);
+                break true;
+            }
+
+            let output: Vec<WordleAnswerColor> = result.chars().map(|c| match c {
+                'g' => WordleAnswerColor::Green,
+                'y' => WordleAnswerColor::Yellow,
+                'x' => WordleAnswerColor::Gray,
+                _ => panic!("Invalid result character: '{}'. Use 'g', 'y', or 'x'.", c),
+            }).collect();
+
+            constraints.update_from_guess(guess, output.try_into().unwrap());
+
+            break false;
+        } {
+            break;
+        }
+
+        words.retain(|&word| constraints.matches(word));
+        if words.is_empty() {
+            println!("No valid words left. Please check your input.");
+            break;
+        }
     }
 }
