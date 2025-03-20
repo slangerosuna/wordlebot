@@ -100,7 +100,15 @@ fn shannon_entropy(distribution: &HashMap<[WordleAnswerColor; 5], usize>, total:
         .sum()
 }
 
-fn find_guess_fitness(guess: &str, words: &[&str], probabilites: &HashMap<&str, f64>) -> f64 {
+fn word_likelihood_score(word: &str, freq_data: &[HashMap<u8, f64>; 5]) -> f64 {
+    word.as_bytes()
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| *freq_data[i].get(&c).unwrap_or(&0.))
+        .sum()
+}
+
+fn find_guess_fitness(guess: &str, words: &[&str], probabilites: &HashMap<&str, f64>, freq_data: &[HashMap<u8, f64>; 5]) -> f64 {
     let mut distribution = HashMap::new();
 
     for &word in words {
@@ -109,16 +117,17 @@ fn find_guess_fitness(guess: &str, words: &[&str], probabilites: &HashMap<&str, 
     }
 
     let entropy = shannon_entropy(&distribution, words.len());
-    let bayesian = probabilites.get(guess).unwrap_or(&0.0);
+    let bayesian = *probabilites.get(guess).unwrap_or(&0.0);
     let valid_bias = if words.contains(&guess) { 1.0 } else { 0.0 };
+    let likelihood = word_likelihood_score(guess, freq_data) as f64;
 
-    entropy + bayesian * 2.7 + valid_bias * 0.1
+    entropy + bayesian * 2.7 + valid_bias * 0.1 + likelihood * 0.01
 }
 
-fn find_best_guess(all_words: &[&'static str], remaining_words: &[&'static str], probabilites: &HashMap<&str, f64>) -> &'static str {
+fn find_best_guess(all_words: &[&'static str], remaining_words: &[&'static str], probabilites: &HashMap<&str, f64>, freq_data: &[HashMap<u8, f64>; 5]) -> &'static str {
     all_words
         .par_iter()
-        .map(|&word| (word, find_guess_fitness(word, remaining_words, probabilites)))
+        .map(|&word| (word, find_guess_fitness(word, remaining_words, probabilites, freq_data)))
         .max_by_key(|&guess| ordered_float::OrderedFloat(guess.1))
         .unwrap()
         .0
@@ -185,6 +194,26 @@ fn update_word_probabilities(words: &[&'static str], constraints: &Constraints) 
     probabilities
 }
 
+fn letter_frequency(words: &[&str]) -> [HashMap<u8, f64>; 5] {
+    let mut frequency: [HashMap<u8, f64>; 5] = Default::default();
+
+    for &word in words {
+        let bytes = word.as_bytes();
+        for (i, &c) in bytes.iter().enumerate() {
+            *frequency[i].entry(c).or_insert(0.) += 1.;
+        }
+    }
+
+    for i in 0..5 {
+        let total: f64 = frequency[i].values().sum();
+        for v in frequency[i].values_mut() {
+            *v /= total;
+        }
+    }
+
+    frequency
+}
+
 fn benchmark(hard_mode: bool) {
     println!("Running Benchmark...");
 
@@ -198,6 +227,7 @@ fn benchmark(hard_mode: bool) {
 
     for iteration in 0..iterations {
         let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
+        let mut freq_data = letter_frequency(&words);
         let correct = words[iteration];
 
         let mut constraints = Constraints::new();
@@ -214,9 +244,9 @@ fn benchmark(hard_mode: bool) {
             } else if words.len() <= 2 || i >= max_iterations {
                 words[0]
             } else if !hard_mode {
-                find_best_guess(&all_words, &words, &probabilities)
+                find_best_guess(&all_words, &words, &probabilities, &freq_data)
             } else {
-                find_best_guess(&words, &words, &probabilities)
+                find_best_guess(&words, &words, &probabilities, &freq_data)
             };
             if guess == correct {
                 break;
@@ -227,6 +257,7 @@ fn benchmark(hard_mode: bool) {
 
             words.retain(|&word| constraints.matches(word));
             probabilities = update_word_probabilities(&words, &constraints);
+            freq_data = letter_frequency(&words);
 
             if i >= max_iterations {
                 failures += 1;
@@ -275,6 +306,7 @@ fn run_assister(hard_mode: bool) {
     let mut probabilities: HashMap<&str, f64> = HashMap::new();
     let mut all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
     let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
+    let mut freq_data = letter_frequency(&words);
     let mut constraints = Constraints::new();
     let max_iterations = 6;
     let mut i = 0;
@@ -286,7 +318,7 @@ fn run_assister(hard_mode: bool) {
         } else if words.len() <= 2 || i >= max_iterations {
             words[0]
         } else {
-            find_best_guess(&all_words, &words, &probabilities)
+            find_best_guess(&all_words, &words, &probabilities, &freq_data)
         };
 
         println!("Best guess: {}", best_guess);
@@ -360,5 +392,6 @@ fn run_assister(hard_mode: bool) {
             break;
         }
         probabilities = update_word_probabilities(&words, &constraints);
+        freq_data = letter_frequency(&words);
     }
 }
