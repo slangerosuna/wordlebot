@@ -172,7 +172,7 @@ fn benchmark(hard_mode: bool) {
             i += 1;
 
             let guess = if i == 1 {
-                "salet"
+                "tares" // Hard codes the first best guess because there's no point in calculating it again every time
             } else if words.len() <= 2 || i >= max_iterations {
                 words[0]
             } else if !hard_mode {
@@ -238,7 +238,7 @@ fn run_assister(hard_mode: bool) {
     loop {
         i += 1;
         let best_guess = if i == 1 {
-            "salet"
+            "tares"
         } else if words.len() <= 2 || i >= max_iterations {
             words[0]
         } else if !hard_mode {
