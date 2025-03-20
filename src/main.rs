@@ -130,6 +130,8 @@ enum WordleAnswerColor {
 }
 
 fn main() {
+    println!("Copyright (C) 2025  Sofia Langer-Osuna\nThis program comes with ABSOLUTELY NO WARRANTY\nThis is free software, and you are welcome to redistribute it\nunder certain conditions.\nSee the GNU General Public License v3.0 for more details.\n\n\n");
+
     print!("Benchmark? (y/n) ");
     std::io::stdout().flush().unwrap();
     let mut bench = String::new();
