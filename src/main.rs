@@ -100,7 +100,7 @@ fn shannon_entropy(distribution: &HashMap<[WordleAnswerColor; 5], usize>, total:
         .sum()
 }
 
-fn find_guess_fitness(guess: &str, words: &[&str]) -> f64 {
+fn find_guess_fitness(guess: &str, words: &[&str], probabilites: &HashMap<&str, f64>) -> f64 {
     let mut distribution = HashMap::new();
 
     for &word in words {
@@ -109,14 +109,16 @@ fn find_guess_fitness(guess: &str, words: &[&str]) -> f64 {
     }
 
     let entropy = shannon_entropy(&distribution, words.len());
+    let bayesian = probabilites.get(guess).unwrap_or(&0.0);
+    let valid_bias = if words.contains(&guess) { 1.0 } else { 0.0 };
 
-    entropy + if words.contains(&guess) { 0.01 } else { 0.0 } // Small bias for valid words
+    entropy + bayesian * 2.7 + valid_bias * 0.1
 }
 
-fn find_best_guess(all_words: &[&'static str], remaining_words: &[&'static str]) -> &'static str {
+fn find_best_guess(all_words: &[&'static str], remaining_words: &[&'static str], probabilites: &HashMap<&str, f64>) -> &'static str {
     all_words
         .par_iter()
-        .map(|&word| (word, find_guess_fitness(word, remaining_words)))
+        .map(|&word| (word, find_guess_fitness(word, remaining_words, probabilites)))
         .max_by_key(|&guess| ordered_float::OrderedFloat(guess.1))
         .unwrap()
         .0
@@ -152,6 +154,37 @@ fn main() {
     }
 }
 
+fn update_word_probabilities(words: &[&'static str], constraints: &Constraints) -> HashMap<&'static str, f64> {
+    let mut probabilities = HashMap::new();
+
+    for &word in words {
+        let mut score = 1.0;
+        let word_bytes = word.as_bytes();
+
+        for (i, c) in word_bytes.iter().enumerate() {
+            if let Some(known) = constraints.known_letters[i] {
+                if *c == known {
+                    score *= 1.5; // Boost words matching known letters
+                }
+            }
+            if constraints.included_letters.iter().any(|v| v.contains(c)) {
+                score *= 1.2; // Boost words containing useful letters
+            }
+            if constraints.excluded_letters.contains(c) {
+                score *= 0.1; // Penalize words containing eliminated letters
+            }
+        }
+
+        probabilities.insert(word, score);
+    }
+
+    // Normalize scores into probabilities
+    let total: f64 = probabilities.values().sum();
+    probabilities.iter_mut().for_each(|(_, v)| *v /= total);
+
+    probabilities
+}
+
 fn benchmark(hard_mode: bool) {
     println!("Running Benchmark...");
 
@@ -168,6 +201,7 @@ fn benchmark(hard_mode: bool) {
         let correct = words[iteration];
 
         let mut constraints = Constraints::new();
+        let mut probabilities: HashMap<&str, f64> = HashMap::new();
 
         let max_iterations = 6;
         let mut i = 0;
@@ -180,9 +214,9 @@ fn benchmark(hard_mode: bool) {
             } else if words.len() <= 2 || i >= max_iterations {
                 words[0]
             } else if !hard_mode {
-                find_best_guess(&all_words, &words)
+                find_best_guess(&all_words, &words, &probabilities)
             } else {
-                find_best_guess(&words, &words)
+                find_best_guess(&words, &words, &probabilities)
             };
             if guess == correct {
                 break;
@@ -192,6 +226,7 @@ fn benchmark(hard_mode: bool) {
             constraints.update_from_guess(guess, output);
 
             words.retain(|&word| constraints.matches(word));
+            probabilities = update_word_probabilities(&words, &constraints);
 
             if i >= max_iterations {
                 failures += 1;
@@ -237,7 +272,8 @@ fn run_assister(hard_mode: bool) {
     println!("Enter your guess and the result (e.g. 'salet ggyyy') or 'exit' to quit.");
     println!("Result format: g = green, y = yellow, x = gray (e.g. 'ggyyx' for 'salet').");
 
-    let all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
+    let mut probabilities: HashMap<&str, f64> = HashMap::new();
+    let mut all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
     let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
     let mut constraints = Constraints::new();
     let max_iterations = 6;
@@ -249,10 +285,8 @@ fn run_assister(hard_mode: bool) {
             "salet"
         } else if words.len() <= 2 || i >= max_iterations {
             words[0]
-        } else if !hard_mode {
-            find_best_guess(&all_words, &words)
         } else {
-            find_best_guess(&words, &words)
+            find_best_guess(&all_words, &words, &probabilities)
         };
 
         println!("Best guess: {}", best_guess);
@@ -318,9 +352,13 @@ fn run_assister(hard_mode: bool) {
         }
 
         words.retain(|&word| constraints.matches(word));
+        if hard_mode {
+            all_words.retain(|&word| constraints.matches(word));
+        }
         if words.is_empty() {
             println!("No valid words left. Please check your input.");
             break;
         }
+        probabilities = update_word_probabilities(&words, &constraints);
     }
 }
