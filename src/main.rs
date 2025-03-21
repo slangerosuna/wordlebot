@@ -264,7 +264,9 @@ fn benchmark(hard_mode: bool) {
             let guess = if i == 1 {
                 "salet" // Hard codes the first best guess because there's no point in calculating it again every time
             } else if words.len() <= 2 || i >= max_iterations {
-                words[0]
+                words.iter().max_by_key(|&word| {
+                    ordered_float::OrderedFloat(*probabilities.get(*word).unwrap_or(&0.0))
+                }).unwrap()
             } else if !hard_mode {
                 find_best_guess(&all_words, &words, &probabilities, &freq_data, &seen)
             } else {
