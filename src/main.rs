@@ -108,7 +108,13 @@ fn word_likelihood_score(word: &str, freq_data: &[HashMap<u8, f64>; 5]) -> f64 {
         .sum()
 }
 
-fn find_guess_fitness(guess: &str, words: &[&str], probabilites: &HashMap<&str, f64>, freq_data: &[HashMap<u8, f64>; 5]) -> f64 {
+fn find_guess_fitness(
+    guess: &str,
+    words: &[&str],
+    probabilites: &HashMap<&str, f64>,
+    freq_data: &[HashMap<u8, f64>; 5],
+    seen: &SeenLetterBitFlags,
+) -> f64 {
     let mut distribution = HashMap::new();
 
     for &word in words {
@@ -120,14 +126,26 @@ fn find_guess_fitness(guess: &str, words: &[&str], probabilites: &HashMap<&str, 
     let bayesian = *probabilites.get(guess).unwrap_or(&0.0);
     let valid_bias = if words.contains(&guess) { 1.0 } else { 0.0 };
     let likelihood = word_likelihood_score(guess, freq_data) as f64;
+    let seen_bias = seen.get_word(guess) as f64;
 
-    entropy + bayesian * 2.7 + valid_bias * 0.1 + likelihood * 0.01
+    entropy + bayesian * 2.7 + valid_bias * 0.1 + likelihood * 0.01 + seen_bias * -0.1
 }
 
-fn find_best_guess(all_words: &[&'static str], remaining_words: &[&'static str], probabilites: &HashMap<&str, f64>, freq_data: &[HashMap<u8, f64>; 5]) -> &'static str {
+fn find_best_guess(
+    all_words: &[&'static str],
+    remaining_words: &[&'static str],
+    probabilites: &HashMap<&str, f64>,
+    freq_data: &[HashMap<u8, f64>; 5],
+    seen: &SeenLetterBitFlags,
+) -> &'static str {
     all_words
         .par_iter()
-        .map(|&word| (word, find_guess_fitness(word, remaining_words, probabilites, freq_data)))
+        .map(|&word| {
+            (
+                word,
+                find_guess_fitness(word, remaining_words, probabilites, freq_data, seen),
+            )
+        })
         .max_by_key(|&guess| ordered_float::OrderedFloat(guess.1))
         .unwrap()
         .0
@@ -163,7 +181,10 @@ fn main() {
     }
 }
 
-fn update_word_probabilities(words: &[&'static str], constraints: &Constraints) -> HashMap<&'static str, f64> {
+fn update_word_probabilities(
+    words: &[&'static str],
+    constraints: &Constraints,
+) -> HashMap<&'static str, f64> {
     let mut probabilities = HashMap::new();
 
     for &word in words {
@@ -229,6 +250,7 @@ fn benchmark(hard_mode: bool) {
         let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
         let mut freq_data = letter_frequency(&words);
         let correct = words[iteration];
+        let mut seen = SeenLetterBitFlags::new();
 
         let mut constraints = Constraints::new();
         let mut probabilities: HashMap<&str, f64> = HashMap::new();
@@ -244,13 +266,15 @@ fn benchmark(hard_mode: bool) {
             } else if words.len() <= 2 || i >= max_iterations {
                 words[0]
             } else if !hard_mode {
-                find_best_guess(&all_words, &words, &probabilities, &freq_data)
+                find_best_guess(&all_words, &words, &probabilities, &freq_data, &seen)
             } else {
-                find_best_guess(&words, &words, &probabilities, &freq_data)
+                find_best_guess(&words, &words, &probabilities, &freq_data, &seen)
             };
             if guess == correct {
                 break;
             }
+
+            seen.set_word(guess, true);
 
             let output = simulate_guess(correct, guess);
             constraints.update_from_guess(guess, output);
@@ -306,6 +330,7 @@ fn run_assister(hard_mode: bool) {
     let mut probabilities: HashMap<&str, f64> = HashMap::new();
     let mut all_words: Vec<&'static str> = include_str!("guess_words.txt").lines().collect();
     let mut words: Vec<&'static str> = include_str!("solution_words.txt").lines().collect();
+    let mut seen = SeenLetterBitFlags::new();
     let mut freq_data = letter_frequency(&words);
     let mut constraints = Constraints::new();
     let max_iterations = 6;
@@ -316,9 +341,11 @@ fn run_assister(hard_mode: bool) {
         let best_guess = if i == 1 {
             "salet"
         } else if words.len() <= 2 || i >= max_iterations {
-            words[0]
+            words.iter().max_by_key(|&word| {
+                ordered_float::OrderedFloat(*probabilities.get(*word).unwrap_or(&0.0))
+            }).unwrap()
         } else {
-            find_best_guess(&all_words, &words, &probabilities, &freq_data)
+            find_best_guess(&all_words, &words, &probabilities, &freq_data, &seen)
         };
 
         println!("Best guess: {}", best_guess);
@@ -393,5 +420,43 @@ fn run_assister(hard_mode: bool) {
         }
         probabilities = update_word_probabilities(&words, &constraints);
         freq_data = letter_frequency(&words);
+        seen.set_word(best_guess, true);
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct SeenLetterBitFlags(u32);
+
+impl SeenLetterBitFlags {
+    fn new() -> Self {
+        Self(0)
+    }
+
+    fn flag_of_char(c: char) -> u32 {
+        0x1 << ((c as u8) - 'a' as u8)
+    }
+
+    fn set(&mut self, c: char, val: bool) {
+        let flag = Self::flag_of_char(c);
+        if val {
+            self.0 |= flag;
+        } else {
+            self.0 &= !flag;
+        }
+    }
+
+    fn set_word(&mut self, w: &str, val: bool) {
+        for c in w.chars() {
+            self.set(c, val);
+        }
+    }
+
+    fn get(&self, c: char) -> bool {
+        let flag = Self::flag_of_char(c);
+        self.0 & flag != 0
+    }
+
+    fn get_word(&self, w: &str) -> usize {
+        w.chars().filter(|c| self.get(*c)).count()
     }
 }
